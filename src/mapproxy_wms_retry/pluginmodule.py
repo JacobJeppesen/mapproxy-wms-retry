@@ -4,12 +4,11 @@ import time
 from mapproxy.client.http import HTTPClient
 from mapproxy.config.loader import WMSSourceConfiguration, register_source_configuration
 from mapproxy.config.spec import mapproxy_yaml_spec
-from mapproxy.util.ext.dictspec.spec import required
 
 SPEC = list(mapproxy_yaml_spec["sources"].values())[0].specs["wms"]
 SPEC["retry"] = {
-    required("max_retries"): int(),
-    required("retry_delay"): int(),  # delay in seconds
+    "max_retries": int(),
+    "retry_delay": int(),  # delay in seconds
 }
 
 logger = logging.getLogger("mapproxy.wms_retry")
@@ -52,7 +51,7 @@ class wms_retry_configuration(WMSSourceConfiguration):
 
     def source(self, params=None):
         # Custom parameters
-        retry = self.conf["retry"]
+        retry = self.conf.get("retry", {})
         retry_params = {
             "max_retries": retry.get("max_retries", 3),
             "retry_delay": retry.get("retry_delay", 1),
