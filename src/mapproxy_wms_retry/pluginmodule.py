@@ -8,30 +8,43 @@ from mapproxy.util.ext.dictspec.spec import required
 
 SPEC = list(mapproxy_yaml_spec["sources"].values())[0].specs["wms"]
 SPEC["retry"] = {
-    required("error_message"): str(),
-    "encoding": str(),
-    "peek_size": int(),  # bytes
-    "max_tentatives": int(),
+    required("max_retries"): int(),
+    required("retry_delay"): int(),  # delay in seconds
 }
 
 logger = logging.getLogger("mapproxy.wms_retry")
 
 
 class HTTPClientRetry(HTTPClient):
-    def __init__(self, error_message, peek_size, max_tentatives):
-        self.error_message = error_message
-        self.peek_size = peek_size
-        self.max_tentatives = max_tentatives
+    def __init__(self, max_retries, retry_delay):
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         super().__init__()
 
     def open(self, *args, **kwargs):
-        for i in range(self.max_tentatives):
-            result = super().open(*args, **kwargs)
-            if self.error_message in result.peek(self.peek_size):
-                logger.warning("Error message detected")
-                time.sleep(2**i)
-            else:
+        for i in range(self.max_retries):
+            try:
+                result = super().open(*args, **kwargs)
+                # Check if status code is not successful (200-299)
+                if hasattr(result, "status_code") and (
+                    result.status_code < 200 or result.status_code >= 300
+                ):
+                    logger.warning(
+                        f"HTTP status {result.status_code} received, retrying in {self.retry_delay}s ({i+1}/{self.max_retries})"
+                    )
+                    time.sleep(self.retry_delay)
+                    continue
                 return result
+            except Exception as e:
+                # Also catch connection errors and other exceptions
+                logger.warning(
+                    f"Request failed with error: {e}, retrying in {self.retry_delay}s ({i+1}/{self.max_retries})"
+                )
+                time.sleep(self.retry_delay)
+                continue
+
+        # If we've exhausted all retries, try one last time
+        return super().open(*args, **kwargs)
 
 
 class wms_retry_configuration(WMSSourceConfiguration):
@@ -40,15 +53,17 @@ class wms_retry_configuration(WMSSourceConfiguration):
     def source(self, params=None):
         # Custom parameters
         retry = self.conf["retry"]
-        if isinstance(retry["error_message"], str):
-            encoding = retry.get("encoding", "utf-8")
-            retry["error_message"] = retry["error_message"].encode(encoding)
-        retry.setdefault("peek_size", 100)
-        retry.setdefault("max_tentatives", 10)
+        retry_params = {
+            "max_retries": retry.get("max_retries", 3),
+            "retry_delay": retry.get("retry_delay", 1),
+        }
+
         # Create WMS source
         wmssource = super().source(params)
+
         # Replace HTTP client
-        wmssource.client.http_client = HTTPClientRetry(**retry)
+        wmssource.client.http_client = HTTPClientRetry(**retry_params)
+
         return wmssource
 
 
